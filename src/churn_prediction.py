@@ -1,38 +1,38 @@
 import pandas as pd
 import os
 import xgboost as xgb
+import shap
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score, roc_auc_score
 
 def train_churn_model():
     rfm_path = os.path.join("data", "processed", "rfm_data.csv")
     clv_path = os.path.join("data", "processed", "clv_data.csv")
-    model_path = os.path.join("models", "xgboost_churn_model.json")
     
-    print("Loading RFM and CLV data...")
+    print("Loading data...")
     rfm = pd.read_csv(rfm_path)
     clv = pd.read_csv(clv_path)
     
     # Merge datasets
     df = pd.merge(rfm, clv, on='Customer ID', how='inner')
     
-    # Define Target: 1 if they haven't purchased in >90 days, else 0
-    df['Is_Churn'] = (df['Recency'] > 90).astype(int)
-    
-    print(f"\nTarget Distribution (Churned vs Retained):\n{df['Is_Churn'].value_counts(normalize=True) * 100}")
-    
-    # Select features
-    # We omit 'Recency' because the target is perfectly derived from it.
-    features = ['Frequency', 'Monetary', 'predicted_monetary_value', 'CLV_12m', 'RFM_Score']
-    
-    X = df[features].fillna(0) # Fill missing values for customers with only 1 purchase
+    # We already calculated the true Is_Churn in rfm_analysis.py
     y = df['Is_Churn']
     
-    # Train-test split (80% training, 20% testing)
+    # We use 'Frequency_x' which comes from the RFM dataframe
+    features = ['Frequency', 'Monetary', 'predicted_monetary_value', 'CLV_12m', 'RFM_Score']
+    X = df[features].fillna(0)
+    
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
     
-    print("\nTraining XGBoost Classifier...")
-    xgb_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
+    # CALCULATE CLASS IMBALANCE RATIO
+    scale_weight = len(y_train[y_train == 0]) / len(y_train[y_train == 1])
+    print(f"Class Imbalance scale_pos_weight: {scale_weight:.2f}")
+    
+    print("Training Advanced XGBoost Classifier...")
+    # Apply the scale_pos_weight so XGBoost pays more attention to churners
+    xgb_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', scale_pos_weight=scale_weight, random_state=42)
     xgb_model.fit(X_train, y_train)
     
     print("\nEvaluating Model...")
@@ -43,14 +43,16 @@ def train_churn_model():
     print(f"ROC-AUC:  {roc_auc_score(y_test, y_prob):.4f}")
     print("\nClassification Report:\n", classification_report(y_test, y_pred))
     
-    # Feature Importance
-    print("Feature Importances:")
-    importance = xgb_model.feature_importances_
-    for feat, imp in zip(features, importance):
-        print(f" - {feat}: {imp:.4f}")
-        
-    print(f"\nSaving model to {model_path}...")
-    xgb_model.save_model(model_path)
+    print("\nGenerating SHAP Explanations...")
+    explainer = shap.TreeExplainer(xgb_model)
+    shap_values = explainer.shap_values(X_test)
+    
+    # Save SHAP Summary Plot
+    plt.figure(figsize=(10, 6))
+    shap.summary_plot(shap_values, X_test, show=False)
+    plt.tight_layout()
+    plt.savefig("shap_summary_plot.png")
+    print("Saved SHAP Summary Plot to 'shap_summary_plot.png'")
     print("Machine Learning Pipeline complete!")
 
 if __name__ == "__main__":
