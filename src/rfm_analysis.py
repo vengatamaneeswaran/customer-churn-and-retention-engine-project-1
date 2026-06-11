@@ -2,51 +2,54 @@ import pandas as pd
 import datetime as dt
 import os
 
-def calculate_rfm(input_path, output_path):
-    print(f"Loading cleaned data from {input_path}...")
+def calculate_rfm():
+    input_path = os.path.join("data", "processed", "online_retail_cleaned.csv")
+    output_path = os.path.join("data", "processed", "rfm_data.csv")
+    
+    print("Loading cleaned data...")
     df = pd.read_csv(input_path)
     
-    # Ensure InvoiceDate is datetime
+    # Ensure InvoiceDate is a datetime object
     df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'])
     
     # Calculate Total Price for each transaction line
     df['TotalPrice'] = df['Quantity'] * df['Price']
     
-    # Define a baseline date (e.g., the day after the last transaction in the dataset)
+    # Define a baseline date (e.g., the day after the last transaction in the entire dataset)
+    # This acts as "today" for our Recency calculation
     latest_date = df['InvoiceDate'].max()
     baseline_date = latest_date + dt.timedelta(days=1)
     
-    print("Calculating RFM metrics...")
-    # Group by Customer ID
+    print("Calculating RFM metrics for each customer...")
+    # Group by Customer ID and calculate Recency, Frequency, and Monetary
     rfm = df.groupby('Customer ID').agg({
         'InvoiceDate': lambda x: (baseline_date - x.max()).days,
         'Invoice': 'nunique',
         'TotalPrice': 'sum'
     })
     
-    # Rename columns
+    # Rename columns to be descriptive
     rfm.rename(columns={
         'InvoiceDate': 'Recency',
         'Invoice': 'Frequency',
         'TotalPrice': 'Monetary'
     }, inplace=True)
     
-    # Create RFM Scores (1-4 scale, 4 is best)
-    # Recency: Lower is better, so labels are reversed
+    # Create RFM Scores using quartiles (1-4 scale, where 4 is the best)
+    # Recency is backwards: lower days since last purchase = better score (4)
     r_labels = range(4, 0, -1)
     f_labels = range(1, 5)
     m_labels = range(1, 5)
     
     rfm['R_Score'] = pd.qcut(rfm['Recency'], q=4, labels=r_labels)
-    # Frequency can have many ties at 1, which breaks qcut. Use rank method.
+    # Use method='first' for Frequency to handle customers who have tied frequencies
     rfm['F_Score'] = pd.qcut(rfm['Frequency'].rank(method='first'), q=4, labels=f_labels)
     rfm['M_Score'] = pd.qcut(rfm['Monetary'], q=4, labels=m_labels)
     
-    # Combine scores
-    rfm['RFM_Segment'] = rfm['R_Score'].astype(str) + rfm['F_Score'].astype(str) + rfm['M_Score'].astype(str)
+    # Create an overall combined RFM Score
     rfm['RFM_Score'] = rfm[['R_Score', 'F_Score', 'M_Score']].sum(axis=1)
     
-    # Create basic segments mapping
+    # Define custom segments based on the quartile scores
     def segment_customer(row):
         r, f, m = int(row['R_Score']), int(row['F_Score']), int(row['M_Score'])
         if r >= 4 and f >= 4 and m >= 4:
@@ -64,14 +67,12 @@ def calculate_rfm(input_path, output_path):
             
     rfm['Customer_Segment'] = rfm.apply(segment_customer, axis=1)
     
-    print("Segment distribution:")
+    print("\nSegment Distribution:")
     print(rfm['Customer_Segment'].value_counts())
     
-    print(f"Saving RFM data to {output_path}...")
+    print(f"\nSaving RFM data to {output_path}...")
     rfm.to_csv(output_path)
-    print("RFM Analysis Done!")
+    print("RFM Analysis complete!")
 
 if __name__ == "__main__":
-    cleaned_file = os.path.join("data", "processed", "online_retail_cleaned.csv")
-    rfm_file = os.path.join("data", "processed", "rfm_data.csv")
-    calculate_rfm(cleaned_file, rfm_file)
+    calculate_rfm()
